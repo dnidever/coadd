@@ -3,4 +3,5 @@ matplotlib
 astropy
 scipy
 dlnpyutils
+healpy
 sep

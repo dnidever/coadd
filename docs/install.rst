@@ -28,5 +28,6 @@ Dependencies
 - astropy
 - matplotlib
 - dlnpyutils
+- healpy
 - sep
 - swarp
