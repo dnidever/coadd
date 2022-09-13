@@ -4,7 +4,7 @@
 from setuptools import setup, find_packages
 
 setup(name='coadd',
-      version='1.0.0',
+      version='1.0.1',
       description='Coadd images',
       author='David Nidever',
       author_email='dnidever@montana.edu',
