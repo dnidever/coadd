@@ -1,0 +1,73 @@
+#!/usr/bin/env python
+#
+# Coadd images
+
+from __future__ import print_function
+
+import os
+import time
+import numpy as np
+import gaiaxpspec
+from astropy.io import fits
+from astropy.table import Table
+from argparse import ArgumentParser
+from dlnpyutils import utils as dln
+import subprocess
+import traceback
+from coadd import coadd
+import importlib as imp
+try:
+    import __builtin__ as builtins # Python 2
+except ImportError:
+    import builtins # Python 3
+
+# Main command-line program
+if __name__ == "__main__":
+    parser = ArgumentParser(description='Coadd images')
+    parser.add_argument('files', type=str, nargs='+', help='Spectrum FITS files or list')
+    parser.add_argument('--outfile', type=str, nargs=1, default='', help='Output filename')
+    parser.add_argument('--statistic', type=str, nargs=1, default='', help='Statistic to use: sum or mean')    
+    parser.add_argument('-v','--verbose', action='store_true', help='Verbose output')
+    parser.add_argument('-t','--timestamp', action='store_true', help='Add timestamp to Verbose output')    
+    args = parser.parse_args()
+
+    t0 = time.time()
+    files = args.files
+    inpoutfile = dln.first_el(args.outfile)
+    outdir = dln.first_el(args.outdir)
+    if outdir == '':
+        outdir = None
+    else:
+        if os.path.exists(outdir) is False:
+            os.mkdir(outdir)
+    verbose = args.verbose
+    timestamp = args.timestamp    
+    inlist = dln.first_el(args.list)
+
+    # Timestamp requested, set up logger
+    if timestamp and verbose:
+        logger = dln.basiclogger()
+        logger.handlers[0].setFormatter(logging.Formatter("%(asctime)s [%(levelname)-5.5s]  %(message)s"))
+        logger.handlers[0].setStream(sys.stdout)
+        builtins.logger = logger   # make it available globally across all modules
+    
+    # Load files from a list
+    if inlist is True:
+        # Check that file exists
+        if os.path.exists(files[0]) is False:
+            raise ValueError(files[0]+' NOT FOUND')
+        # Read in the list
+        listfile = files[0]
+        files = dln.readlines(listfile)
+        # If the filenames are relative, add the list directory
+        listdir = os.path.dirname(listfile)
+        if listdir != '':
+            fdir = [os.path.dirname(f) for f in files]
+            rel, = np.where(np.char.array(fdir)=='')
+            if len(rel)>0:
+                for i in range(len(rel)):
+                    files[rel[i]] = listdir+'/'+files[rel[i]]
+    nfiles = len(files)
+
+    # Run coadd
+    coadd.coadd(files,verbose=verbose,logger=logger)
