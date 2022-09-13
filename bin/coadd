@@ -33,13 +33,7 @@ if __name__ == "__main__":
 
     t0 = time.time()
     files = args.files
-    inpoutfile = dln.first_el(args.outfile)
-    outdir = dln.first_el(args.outdir)
-    if outdir == '':
-        outdir = None
-    else:
-        if os.path.exists(outdir) is False:
-            os.mkdir(outdir)
+    outfile = dln.first_el(args.outfile)
     verbose = args.verbose
     timestamp = args.timestamp    
     inlist = dln.first_el(args.list)
@@ -70,4 +64,4 @@ if __name__ == "__main__":
     nfiles = len(files)
 
     # Run coadd
-    coadd.coadd(files,verbose=verbose,logger=logger)
+    out = coadd.coadd(files,outfile=outfile,verbose=verbose,logger=logger)

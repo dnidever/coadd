@@ -4,12 +4,11 @@
 #
 
 __authors__ = 'David Nidever <dnidever@montana.edu>'
-__version__ = '20170911'  # yyyymmdd
+__version__ = '20220913'  # yyyymmdd
 
 
 """
-    Software to create an NSC coadd.
-
+    Software to create coadds.
 """
 
 
@@ -722,7 +721,8 @@ def image_interp(imagefile,outhead,weightfile=None,masknan=False,verbose=False):
         return oim,ohead,obg
 
     
-def meancube(imcube,wtcube,weights=None,crreject=False,statistic='mean'):
+def meancube(imcube,wtcube,weights=None,statistic='mean',verbose=False,
+             reject=False,nsigthresh=3.5):
     """ This does the actual stack of an image cube.  The images must already be background-subtracted and scaled."""
     # Weights should be normalized, e.g., sum(weights)=1
     # pixels to be masked in an image should have wtcube = 0
@@ -751,14 +751,38 @@ def meancube(imcube,wtcube,weights=None,crreject=False,statistic='mean'):
     # Create final error image
     error = np.sqrt(totvarim)
 
+    
+    # CR rejection
+    if reject is True:
+        finaltot = np.zeros((ny,nx),float)
+        finaltotwt = np.zeros((ny,nx),float)        
+        totvarim = np.zeros((ny,nx),float)
+        for i in range(nimages):
+            mask = (wtcube[:,:,i] > 0)
+            nmask = np.sum(mask)
+            var = np.zeros((ny,nx),float)  # sig^2
+            var[mask] = 1/wtcube[:,:,i][mask]            
+            diff = imcube[:,:,i]-final
+            # Exclude pixels that are far from the initial stacked image
+            mask = (wtcube[:,:,i] > 0) & (np.abs(diff) < nsigthresh*np.sqrt(var))
+            nrej = nmask-np.sum(mask)
+            if verbose:
+                print('%d rejecting %d pixels' % (i+1,nrej))
+            finaltot[mask] += imcube[:,:,i][mask]*weights[i]
+            finaltotwt[mask] += weights[i]
+            # Variance in each pixel for noise images and the scalar weights
+            totvarim[mask] += weights[i]*var[mask]
+        # Create the weighted average image
+        finaltotwt[finaltotwt<=0] = 1
+        final = finaltot/finaltotwt
+        # Create final error image
+        error = np.sqrt(totvarim)
+            
     # Sum
     if statistic == 'sum':
         final *= nimages
         error *= nimages
-    
-    # CR rejection
-    if crreject is True:
-        pass
+
     
     return final,error
 
@@ -800,7 +824,7 @@ def reassemble(filename):
     return image,head
 
 
-def stack(meta,statistic='mean'):
+def stack(meta,statistic='mean',reject=False,verbose=False):
     """
     Actually do the stacking/averaging of multiple images already reprojected.
 
@@ -812,6 +836,10 @@ def stack(meta,statistic='mean'):
     statistic : str, optional
        The statistic to use when combining the images: 'mean' or 'sum'.  Default
          is 'mean'.
+    reject : boolean, optional
+       Reject outlier pixels.  Default is False. 
+    verbose : boolean, optional
+       Verbose output to the screen.  Default is False.
 
     Returns
     -------
@@ -871,6 +899,8 @@ def stack(meta,statistic='mean'):
         
     # Loop over bins
     for b in range(nbin):
+        if verbose:
+            print('bin %d' % (b+1))
         imcube = np.zeros((bintab['NY'][b],bintab['NX'][b],nimages),float)
         wtcube = np.zeros((bintab['NY'][b],bintab['NX'][b],nimages),float)        
         # Loop over images
@@ -890,7 +920,8 @@ def stack(meta,statistic='mean'):
             imcube[:,:,f] = im
             wtcube[:,:,f] = wt
         # Do the weighted combination
-        avgim,errim = meancube(imcube,wtcube,weights=weights,statistic=statistic)
+        avgim,errim = meancube(imcube,wtcube,weights=weights,statistic=statistic,
+                               reject=reject,verbose=verbose)
         # Stuff into final image
         final[bintab['Y0'][b]:bintab['Y1'][b]+1,bintab['X0'][b]:bintab['X1'][b]+1] = avgim
         error[bintab['Y0'][b]:bintab['Y1'][b]+1,bintab['X0'][b]:bintab['X1'][b]+1] = errim
@@ -961,6 +992,33 @@ def mktempfile(im,head,bg,wt,outhead,nbin=2):
 
     return timfile,tbgfile,twtfile
 
+def measure_scale(meta,refim,referr):
+    """ Measure best scale for an image versus a reference image using good pixels with flux."""
+
+    # Normally the reference image is an initial combined image
+
+    # construct the reference weight image
+    refwt = referr.copy()
+    refwt[referr>0] = 1/referr[referr>0]**2
+    
+    # Load the target flux and weight image    
+    fluxim,fluxhead = reassemble(meta['flxfile'])
+    wtim,wtead = reassemble(meta['wtfile'])
+
+    # wt = 1/err**2
+    
+    # Find good pixels
+    good = (refwt > 0) & (refim*np.sqrt(refwt)>10) & (refim>0) & \
+           (wtim > 0) & (fluxim*np.sqrt(wtim)>10) & (fluxim>0)
+    if np.sum(good)==0:
+        good = (refwt > 0) & (refim*np.sqrt(refwt)>6) & (refim>0) & \
+               (wtim > 0) & (fluxim*np.sqrt(wtim)>6) & (fluxim>0)        
+    if np.sum(good)==0:
+        return None
+        
+    scl = np.median(fluxim[good]/refim[good])
+
+    return scl
     
 def coadd(imagefiles,weightfiles,meta,outhead,statistic='mean',
           nbin=2,outfile=None,verbose=False):
@@ -992,13 +1050,15 @@ def coadd(imagefiles,weightfiles,meta,outhead,statistic='mean',
     -------
     final : numpy array
        Final coadded flux image.
+    head : header
+       Final header.
     error : numpy array
        Final coadded error image.
 
     Example
     -------
 
-    final, error = coadd(imagefiles,weightfiles,meta,outhead)
+    final,head,error = coadd(imagefiles,weightfiles,meta,outhead)
 
     """
 
@@ -1040,9 +1100,21 @@ def coadd(imagefiles,weightfiles,meta,outhead,statistic='mean',
         
     # Stack the images
     #   this does the scaling and weighting
-    final,error = stack(meta,statistic=statistic)
+    final1,error1 = stack(meta,statistic=statistic,verbose=verbose)
 
+    # Remeasure scales compared to the first stacked image
+    if verbose:
+        print('Re-measuring scales relative to the first stacked image')
+    origmeta = meta.copy()
+    for i in range(nimages):
+        newscale = measure_scale(final1,error1,meta[i])
+        if newscale is not None:
+            meta['scale'][i] = newscale
+        if verbose:
+            print('%5d %8.3f' % (i+1,newscale))
 
+    # Now restack with the new scales
+    final,error = stack(meta,statistic=statistic,verbose=verbose)    
     
     # Delete temporary files
     for i in range(len(meta)):
@@ -1077,7 +1149,7 @@ def coadd(imagefiles,weightfiles,meta,outhead,statistic='mean',
     if verbose:
         print('dt = %8.2f sec' % dt)
 
-    return final,error
+    return final,fhead,error
 
 
     # OLD NOTES
