@@ -38,6 +38,12 @@ import subprocess
 import glob
 from dlnpyutils import utils as dln, coords
 
+def datadir():
+    """ Return the data directory."""
+    fil = os.path.abspath(__file__)
+    codedir = os.path.dirname(fil)
+    datadir = codedir+'/data/'
+    return datadir
     
 def brickwcs(ra,dec,npix=3600,step=0.262):
     """ Create the WCS and header for a brick."""
@@ -440,10 +446,8 @@ def image_reproject_swarp(im,head,outhead,wtim=None,tmproot='.',verbose=False):
 
     # Create configuration file
     # fields to modify: IMAGEOUT_NAME, WEIGHTOUT_NAME, WEIGHT_IMAGE, CENTER, PIXEL_SCALE, IMAGE_SIZE, GAIN?
-    fil = os.path.abspath(__file__)
-    codedir = os.path.dirname(os.path.dirname(os.path.dirname(fil)))
-    paramdir = codedir+'/params/'
-    shutil.copyfile(paramdir+"swarp.config",tmpdir+"/swarp.config")
+    ddir = datadir()
+    shutil.copyfile(ddir+"swarp.config",tmpdir+"/swarp.config")
     configfile = "swarp.config"
     clines = dln.readlines(configfile)
 
@@ -526,6 +530,8 @@ def image_reproject_swarp(im,head,outhead,wtim=None,tmproot='.',verbose=False):
     out = (oim,ohead)
     if wtim is not None:
         owtim,owthead = fits.getdata(wtoutfile,header=True)
+        if owthead['CD1_1'] < 0:
+            owtim = owtim[:,::-1]
         out = (oim,ohead,owtim)
 
     # Delete temporary directory and files??
@@ -769,9 +775,9 @@ def reassemble(filename):
     fny = head0['ONAXIS2']    
     image = np.zeros((fny,fnx),float)
     
-    for i in range(len(hdu)-1):
-        head1 = hdu[i+1].header
-        im1 = hdu[i+1].data        
+    for i in range(len(hdu)):
+        head1 = hdu[i].header
+        im1 = hdu[i].data        
         x0 = head1['SUBX0']
         x1 = head1['SUBX1']
         nx = head1['SUBNX']
