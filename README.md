@@ -1,2 +1,0 @@
-# coadd
-Coadd images
