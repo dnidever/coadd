@@ -26,7 +26,13 @@ if __name__ == "__main__":
     parser = ArgumentParser(description='Coadd images')
     parser.add_argument('files', type=str, nargs='+', help='Spectrum FITS files or list')
     parser.add_argument('--outfile', type=str, nargs=1, default='', help='Output filename')
-    parser.add_argument('--statistic', type=str, nargs=1, default='', help='Statistic to use: sum or mean')    
+    parser.add_argument('--statistic', type=str, nargs=1, default='', help='Statistic to use: sum or mean')
+    parser.add_argument('--wcsfile', type=str, nargs=1, default='', help='Output WCS file')
+    parser.add_argument('--wcscen', type=str, nargs=1, default='', help='Output WCS central position, e.g., 56.00,-45.6')
+    parser.add_argument('--wcsscale', type=str, nargs=1, default='', help='Output WCS pixel scale in arcsec')
+    parser.add_argument('--wcssize', type=str, nargs=1, default='', help='Output WCS size, e.g. 3600x34600')
+    parser.add_argument('--sigclip', action='store_true', help='Perform sigma clipping')
+    parser.add_argument('--rescale', action='store_true', help='Rescale each image using coadd')    
     parser.add_argument('-v','--verbose', action='store_true', help='Verbose output')
     parser.add_argument('-t','--timestamp', action='store_true', help='Add timestamp to Verbose output')    
     args = parser.parse_args()
@@ -34,6 +40,12 @@ if __name__ == "__main__":
     t0 = time.time()
     files = args.files
     outfile = dln.first_el(args.outfile)
+    wcsfile = dln.first_el(args.wcsfile)
+    wcscen = dln.first_el(args.wcscen)
+    wcsscale = dln.first_el(args.wcsscale)
+    wcssize = dln.first_el(args.wcssize)
+    sigclip = args.sigclip
+    rescale = args.resacle
     verbose = args.verbose
     timestamp = args.timestamp    
     inlist = dln.first_el(args.list)
@@ -64,4 +76,5 @@ if __name__ == "__main__":
     nfiles = len(files)
 
     # Run coadd
-    out = coadd.coadd(files,outfile=outfile,verbose=verbose,logger=logger)
+    out = coadd.coadd(files,outfile=outfile,wcsfile=wcsfile,wcsscale=wcsscale,wcssize=wcssize,
+                      sigclip=sigclip,resacle=rescale,verbose=verbose,logger=logger)

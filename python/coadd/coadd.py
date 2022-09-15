@@ -36,88 +36,7 @@ import tempfile
 import subprocess
 import glob
 from dlnpyutils import utils as dln, coords
-
-def datadir():
-    """ Return the data directory."""
-    fil = os.path.abspath(__file__)
-    codedir = os.path.dirname(fil)
-    datadir = codedir+'/data/'
-    return datadir
-    
-def brickwcs(ra,dec,npix=3600,step=0.262):
-    """ Create the WCS and header for a brick."""
-
-    # This creates a brick WCS given the brick structure
-
-    # Make the tiling file
-    #---------------------
-    # Lines with the tiling scheme first
-    nx = npix
-    ny = npix
-    step = step / npix
-    xref = nx//2
-    yref = ny//2
-
-    w = WCS()
-    w.wcs.crpix = [xref+1,yref+1]
-    w.wcs.cdelt = np.array([step,step])
-    w.wcs.crval = [ra,dec]
-    w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
-    w.array_shape = (npix,npix)
-
-    #  Make the header as well
-    hdu = fits.PrimaryHDU()
-    head = hdu.header
-
-    head['NAXIS'] = 2
-    head['NAXIS1'] = nx
-    head['CDELT1'] = step
-    head['CRPIX1'] = xref+1
-    head['CRVAL1'] = ra
-    head['CTYPE1'] = 'RA---TAN'
-    head['NAXIS2'] = ny
-    head['CDELT2'] = step
-    head['CRPIX2'] = yref+1
-    head['CRVAL2'] = dec
-    head['CTYPE2'] = 'DEC--TAN'
-    #head['BRAMIN'] = brickstr.ra1,'RA min of unique brick area'
-    #head['BRAMAX'] = brickstr.ra2,'RA max of unique brick area'
-    #head['BDECMIN'] = brickstr.dec1,'DEC min of unique brick area'
-    #head['BDECMAX'] = brickstr.dec2,'DEC max of unique brick area'
-
-    return w,head
-
-def inNativeByteOrder(im):
-    """ Put image in native byte order."""
-    if ((im.dtype.byteorder=='<') & (sys.byteorder=='big')) | ((im.dtype.byteorder=='>') & (sys.byteorder=='little')):
-        return im.byteswap(inplace=True).newbyteorder()
-    else:
-        return im
-
-def doImagesOverlap(head1,head2):
-    """ Do the two images overlap."""
-
-    if isinstance(head1,WCS):
-        wcs1 = head1
-    else:
-        wcs1 = WCS(head1)
-    ny1,nx1 = wcs1.array_shape
-    ra1,dec1 = wcs1.wcs_pix2world(nx1/2,ny1/2,0)
-    vra1,vdec1 = wcs1.wcs_pix2world([0,nx1-1,nx1-1,0],[0,0,ny1-1,ny1-1],0)
-    vlon1,vlat1 = coords.rotsphcen(vra1,vdec1,ra1,dec1,gnomic=True)
-
-    if isinstance(head2,WCS):
-        wcs2 = head2
-    else:
-        wcs2 = WCS(head2)
-    ny2,nx2 = wcs2.array_shape
-    vra2,vdec2 = wcs2.wcs_pix2world([0,nx2-1,nx2-1,0],[0,0,ny2-1,ny2-1],0)
-    vlon2,vlat2 = coords.rotsphcen(vra2,vdec2,ra1,dec1,gnomic=True)
-
-    olap = coords.doPolygonsOverlap(vlon1,vlat1,vlon2,vlat2)
-
-    return olap
-
+from . import utils,io
  
 def adxyinterp(head,rr,dd,nstep=10,xyad=False):
     """
@@ -445,7 +364,7 @@ def image_reproject_swarp(im,head,outhead,wtim=None,tmproot='.',verbose=False):
 
     # Create configuration file
     # fields to modify: IMAGEOUT_NAME, WEIGHTOUT_NAME, WEIGHT_IMAGE, CENTER, PIXEL_SCALE, IMAGE_SIZE, GAIN?
-    ddir = datadir()
+    ddir = utils.datadir()
     shutil.copyfile(ddir+"swarp.config",tmpdir+"/swarp.config")
     configfile = "swarp.config"
     clines = dln.readlines(configfile)
@@ -655,7 +574,7 @@ def image_interp(imagefile,outhead,weightfile=None,masknan=False,verbose=False):
         ny1 = head['NAXIS2']
 
         # Check that it overlaps the final area
-        if doImagesOverlap(brickwcs,wcs) is False:
+        if utils.doImagesOverlap(brickwcs,wcs) is False:
             continue
         print('Extension '+str(i)+' overlaps')
             
@@ -1020,8 +939,8 @@ def measure_scale(meta,refim,referr):
 
     return scl
     
-def coadd(imagefiles,weightfiles,meta,outhead,statistic='mean',
-          nbin=2,outfile=None,verbose=False):
+def coadd(imagefiles,weightfiles,meta=None,outhead=None,wcsfile=None,wcscen=None,wcsscale=None,wcssize=None,
+          statistic='mean',sigclip=False,rescale=False,nbin=2,outfile=None,verbose=False):
     """
     Create a coadd given a list of images.
 
@@ -1068,22 +987,47 @@ def coadd(imagefiles,weightfiles,meta,outhead,statistic='mean',
     
     nimages = dln.size(imagefiles)
 
+    # Get information on all of the images
+    info = utils.fileinfo(imagefiles)
+
+    # Output WCS
+    #-----------
+    if outhead is None and wcsfile is not None:
+        if os.path.exists(wcsfile)==False:
+            raise ValueError(wcsfile+' NOT FOUND')
+        if utils.file_isfits(wcsfile):
+            outhead = fits.getheader(wcsfile,0)
+        else:
+            outhead = Table.read(wcsfile,format='ascii')
+    # No output WCS input, create it automatically
+    if outhead is None and wcsfile is None:
+        outhead = create_wcs(info,wcscen=wcscen,wcsscale=wcsscale,wcssize=wcssize)
+
+    # Add meta columns to info table
+    if meta is not None:
+        cols = ['exptime','fwhm','zpterm','scale','weight']:
+        for c in cols:
+            if c in meta.colnames:
+                info[c] = meta[c]
+        
     # Figure out scales and weights
-    # F_trans = 10^(-0.8*(delta_mag-0.2))    
-    scales = meta['exptime'] * 10**(-0.8*(meta['zpterm']-0.2))
-    meta['scale'] = scales
+    if 'scale' not in meta.colnames:
+        # F_trans = 10^(-0.8*(delta_mag-0.2))    
+        scales = meta['exptime'] * 10**(-0.8*(meta['zpterm']-0.2))
+        info['scale'] = scales
 
     # Use weight~S/N
-    # S/N goes as sqrt(exptime) and in background-dominated regime S/N ~ 1/FWHM
-    # so maybe something like weight ~ sqrt(scaling)/FWHM
-    weights = np.sqrt(scales)/meta['fwhm']
-    weights /= np.sum(weights)    # normalize
-    meta['weight'] = weights
+    if 'weight' not in meta.colnames:
+        # S/N goes as sqrt(exptime) and in background-dominated regime S/N ~ 1/FWHM
+        # so maybe something like weight ~ sqrt(scaling)/FWHM
+        weights = np.sqrt(scales)/meta['fwhm']
+        weights /= np.sum(weights)    # normalize
+        info['weight'] = weights
 
     # Loop over the images
-    meta['flxfile'] = 100*' '  # add columns for temporary file names
-    meta['wtfile'] = 100*' '
-    meta['bgfile'] = 100*' '
+    info['flxfile'] = 100*' '  # add columns for temporary file names
+    info['wtfile'] = 100*' '
+    info['bgfile'] = 100*' '
     for f in range(nimages):
         if verbose:
             print(str(f+1)+' '+imagefiles[f]+' '+weightfiles[f])
@@ -1094,45 +1038,47 @@ def coadd(imagefiles,weightfiles,meta,outhead,statistic='mean',
 
         # Break up image and save to temporary files
         tflxfile,tbgfile,twtfile = mktempfile(fim,fhead,fbg,fwt,outhead,nbin=nbin)
-        meta['flxfile'][f] = tflxfile
-        meta['bgfile'][f] = tbgfile
-        meta['wtfile'][f] = twtfile
+        info['flxfile'][f] = tflxfile
+        info['bgfile'][f] = tbgfile
+        info['wtfile'][f] = twtfile
         
     # Stack the images
     #   this does the scaling and weighting
-    final1,error1 = stack(meta,statistic=statistic,verbose=verbose)
+    final1,error1 = stack(info,statistic=statistic,verbose=verbose)
 
     # Remeasure scales compared to the first stacked image
-    if verbose:
-        print('Re-measuring scales relative to the first stacked image')
-    origmeta = meta.copy()
-    for i in range(nimages):
-        newscale = measure_scale(final1,error1,meta[i])
-        if newscale is not None:
-            meta['scale'][i] = newscale
+    #-----------------------------------------------------
+    if rescale:
         if verbose:
-            print('%5d %8.3f' % (i+1,newscale))
+            print('Re-measuring scales relative to the first stacked image')
+        originfo = info.copy()
+        for i in range(nimages):
+            newscale = measure_scale(final1,error1,info[i])
+            if newscale is not None:
+                info['scale'][i] = newscale
+            if verbose:
+                print('%5d %8.3f' % (i+1,newscale))
 
-    # Now restack with the new scales
-    final,error = stack(meta,statistic=statistic,verbose=verbose)    
+        # Now restack with the new scales
+        final,error = stack(info,statistic=statistic,verbose=verbose)    
     
     # Delete temporary files
-    for i in range(len(meta)):
-        if os.path.exists(meta['flxfile'][i]): os.remove(meta['flxfile'][i])
-        if os.path.exists(meta['bgfile'][i]): os.remove(meta['bgfile'][i])
-        if os.path.exists(meta['wtfile'][i]): os.remove(meta['wtfile'][i])
+    for i in range(len(info)):
+        if os.path.exists(info['flxfile'][i]): os.remove(info['flxfile'][i])
+        if os.path.exists(info['bgfile'][i]): os.remove(info['bgfile'][i])
+        if os.path.exists(info['wtfile'][i]): os.remove(info['wtfile'][i])
 
     # Final header
     #  scales, weights, image names, mean backgrounds
     fhead = outhead.copy()
     fhead['NIMAGES'] = len(imagefiles)
-    for i in range(len(meta)):
+    for i in range(len(info)):
         fhead['FILE'+str(i+1)] = imagefiles[i]
         fhead['WTFL'+str(i+1)] = weightfiles[i]
-        fhead['WEIT'+str(i+1)] = meta['weight'][i]
-        fhead['SCAL'+str(i+1)] = meta['scale'][i]
-        fhead['EXPT'+str(i+1)] = meta['exptime'][i]
-        fhead['FWHM'+str(i+1)] = meta['fwhm'][i]
+        fhead['WEIT'+str(i+1)] = info['weight'][i]
+        fhead['SCAL'+str(i+1)] = info['scale'][i]
+        fhead['EXPT'+str(i+1)] = info['exptime'][i]
+        fhead['FWHM'+str(i+1)] = info['fwhm'][i]
 
     # Output final file
     if outfile is not None:

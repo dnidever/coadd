@@ -235,71 +235,165 @@ def date2jd(dateobs,mjd=False):
     else:
         return t.jd
 
-def trans_coo(xdata,*par):
-    """ Apply the transformation to X/Y"""
-
-    xin = xdata[0]
-    yin = xdata[1]
-
-    A = par[0]
-    B = par[1]
-    C = par[2]
-    D = par[3]
-    E = par[4]
-    F = par[5]
+def datadir():
+    """ Return the data directory."""
+    fil = os.path.abspath(__file__)
+    codedir = os.path.dirname(fil)
+    datadir = codedir+'/data/'
+    return datadir
     
-    # from ccdpck.txt
-    #              x(1) = A + C*x(n) + E*y(n)
-    #              y(1) = B + D*x(n) + F*y(n)
+def brickwcs(ra,dec,npix=3600,step=0.262):
+    """ Create the WCS and header for a brick."""
 
-    # Apply transformation
-    xout = A + C*xin + E*yin
-    yout = B + D*xin + F*yin
+    # This creates a brick WCS given the brick structure
+
+    # Make the tiling file
+    #---------------------
+    # Lines with the tiling scheme first
+    nx = npix
+    ny = npix
+    step = step / npix
+    xref = nx//2
+    yref = ny//2
+
+    w = WCS()
+    w.wcs.crpix = [xref+1,yref+1]
+    w.wcs.cdelt = np.array([step,step])
+    w.wcs.crval = [ra,dec]
+    w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    w.array_shape = (npix,npix)
+
+    #  Make the header as well
+    hdu = fits.PrimaryHDU()
+    head = hdu.header
+
+    head['NAXIS'] = 2
+    head['NAXIS1'] = nx
+    head['CDELT1'] = step
+    head['CRPIX1'] = xref+1
+    head['CRVAL1'] = ra
+    head['CTYPE1'] = 'RA---TAN'
+    head['NAXIS2'] = ny
+    head['CDELT2'] = step
+    head['CRPIX2'] = yref+1
+    head['CRVAL2'] = dec
+    head['CTYPE2'] = 'DEC--TAN'
+    #head['BRAMIN'] = brickstr.ra1,'RA min of unique brick area'
+    #head['BRAMAX'] = brickstr.ra2,'RA max of unique brick area'
+    #head['BDECMIN'] = brickstr.dec1,'DEC min of unique brick area'
+    #head['BDECMAX'] = brickstr.dec2,'DEC max of unique brick area'
+
+    return w,head
+
+def inNativeByteOrder(im):
+    """ Put image in native byte order."""
+    if ((im.dtype.byteorder=='<') & (sys.byteorder=='big')) | ((im.dtype.byteorder=='>') & (sys.byteorder=='little')):
+        return im.byteswap(inplace=True).newbyteorder()
+    else:
+        return im
+
+def doImagesOverlap(head1,head2):
+    """ Do the two images overlap."""
+
+    if isinstance(head1,WCS):
+        wcs1 = head1
+    else:
+        wcs1 = WCS(head1)
+    ny1,nx1 = wcs1.array_shape
+    ra1,dec1 = wcs1.wcs_pix2world(nx1/2,ny1/2,0)
+    vra1,vdec1 = wcs1.wcs_pix2world([0,nx1-1,nx1-1,0],[0,0,ny1-1,ny1-1],0)
+    vlon1,vlat1 = coords.rotsphcen(vra1,vdec1,ra1,dec1,gnomic=True)
+
+    if isinstance(head2,WCS):
+        wcs2 = head2
+    else:
+        wcs2 = WCS(head2)
+    ny2,nx2 = wcs2.array_shape
+    vra2,vdec2 = wcs2.wcs_pix2world([0,nx2-1,nx2-1,0],[0,0,ny2-1,ny2-1],0)
+    vlon2,vlat2 = coords.rotsphcen(vra2,vdec2,ra1,dec1,gnomic=True)
+
+    olap = coords.doPolygonsOverlap(vlon1,vlat1,vlon2,vlat2)
+
+    return olap
+
+def create_wcs(info,wcscen=None,wcsscale=None,wcssize=None):
+    """
+    Create output WCS for a bunch of input files.
+
+    Parameters
+    ----------
+    info : table
+      Table of information on each image produced by fileinfo() function.
+    wcscen : tuple/list, optional
+      Requested center (RA,DEC) in degrees.
+    wcsscale : float, optional
+      Requested pixel scale in arcsec.
+    wcssize : tuple/list, optional
+      Request image size (Nx,Ny).
+
+    Returns
+    -------
+    wcs : WCS object
+      Output WCS that covers the input images.
+
+    Example
+    -------
+
+    wcs = create_wcs(info)
+
+    """
+
+    # RA/DEC range
+    ra_range = [np.min(info['ra_range']),np.max(info['ra_range'])]
+    dec_range = [np.min(info['dec_range']),np.max(info['dec_range'])]
+
+    # Center
+    if wcscen is not None:
+        cenra, cendec = wcscen
+    else:
+        cenra = np.mean(ra_range)
+        cendec = np.mean(dec_range)
+        
+    # Pixel scale
+    if wcsscale is not None:
+        pixscale = wcsscale / 3600.0
+    else:
+        pixscale = np.mean(info['pixscale']) / 3600
+        
+    # Size
+    if wcssize is not None:
+        nx,ny = wcssize
+    else:
+        nx = int(np.ceil((ra_range[1]-ra_range[0])*np.cos(np.deg2rad(np.max(np.abs(dec_range))))/pixscale))
+        ny = int(np.ceil((dec_range[1]-dec_range[0])/pixscale))
+
+    xref = nx//2
+    yref = ny//2
+    w = WCS(naxis=2)
+    w.wcs.crpix = [xref+1,yref+1]
+    w.wcs.cd = np.zeros((2,2),float)
+    w.wcs.cd[0,0] = pixscale
+    w.wcs.cd[1,1] = pixscale
+    #w.wcs.cdelt = np.array([pixscale,pixscale])
+    w.wcs.crval = [cenra,cendec]
+    w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    w.array_shape = (ny,nx)
+
+    # If wcssize was not given, then make sure that the new image covers the full ra/dec range
+    if wcssize is None:
+        vra = [ra_range[0],ra_range[1],ra_range[1],ra_range[0]]
+        vdec = [dec_range[0],dec_range[0],dec_range[1],dec_range[1]]
+        xcoo,ycoo = w.wcs_world2pix(vra,vdec,0)
+        newnx = int(np.ceil(np.max(xcoo)-np.min(xcoo)))
+        newny = int(np.ceil(np.max(ycoo)-np.min(ycoo)))
+        newxref = xref - np.min(xcoo)
+        newyref = yref - np.min(ycoo)        
+        w.wcs.crpix = [newxref+1,newyref+1]
+        w.array_shape = (newny,newnx)
     
-    return xout,yout
+    return w
 
 
-def trans_coo_dev(xdata,*par):
-
-    # Rotate coordinates(2) to coordinate system 1
-    # and return deviates
-    x1,y1 = xdata[0]
-    x2,y2 = xdata[1]
-
-    newx2,newy2 = trans_coo([x2,y2],*par)
-
-    diff = np.sqrt( (x1-newx2)**2 + (y1-newy2)**2 )
-
-    # Do robust outlier rejection
-    std = dln.mad(diff)
-    med = np.median(diff)
-    bd = (diff > (med+3.0*std))
-    if np.sum(bd)>0:
-        diff[bd] = 0.0
-
-    return diff.flatten()
-
-def trans_coo_outlier(xdata,*par):
-
-    # Rotate coordinates(2) to coordinate system 1
-    # and return deviates
-    x1,y1 = xdata[0]
-    x2,y2 = xdata[1]
-
-    newx2,newy2 = trans_coo([x2,y2],*par)
-
-    diff = np.sqrt( (x1-newx2)**2 + (y1-newy2)**2 )
-
-    # Do robust outlier rejection
-    std = dln.mad(diff)
-    med = np.median(diff)
-    bd = (diff > (med+3.0*std))
-    if np.sum(bd)>0:
-        newx2[bd] = x1[bd]
-        newy2[bd] = y1[bd]
-
-    return np.append(newx2,newy2)
- 
 def validtile(tile):
     """
     This double-checks if the TILE structure is valid. 
