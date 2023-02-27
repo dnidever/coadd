@@ -473,6 +473,8 @@ def image_reproject(im,head,outhead,wtim=None,kind='swarp',tmproot='.',verbose=F
     Wrapper for the _swarp and _bilinear functions
     """
 
+    # use the new lanczos package instead!!!
+    
     if kind == 'swarp':
         return image_reproject_swarp(im,head,outhead,wtim=wtim,tmproot=tmproot,verbose=verbose)
     elif kind == 'bilinear':
@@ -821,11 +823,17 @@ def stack(meta,statistic='mean',reject=False,verbose=False):
         if verbose:
             print('bin %d' % (b+1))
         imcube = np.zeros((bintab['NY'][b],bintab['NX'][b],nimages),float)
-        wtcube = np.zeros((bintab['NY'][b],bintab['NX'][b],nimages),float)        
+        wtcube = np.zeros((bintab['NY'][b],bintab['NX'][b],nimages),float)
+        bnx = bintab['NX'][b]
+        bny = bintab['NY'][b]        
         # Loop over images
         for f in range(nimages):
             im,head = fits.getdata(imagefiles[f],b,header=True)
+            if im.size==1:
+                im = np.zeros((bny,nbx),float)+im[0]
             wt,whead = fits.getdata(weightfiles[f],b,header=True)
+            if wt.size==1:
+                wt = np.zeros((bny,nbx),float)+wt[0]                
             # Deal with NaNs
             wt[~np.isfinite(im)] = 0
 
@@ -890,14 +898,20 @@ def mktempfile(im,head,bg,wt,outhead,nbin=2):
             newhead['SUBNY'] = y1-y0
             # Flux
             subim = im[y0:y1,x0:x1].copy()
+            if np.sum(subim==subim[0,0])==subim.size:
+                subim = np.atleast_1d(subim[0,0])
             hdu1 = fits.PrimaryHDU(subim,newhead.copy())
             timhdu.append(hdu1)
             # Background
             subbg = bg[y0:y1,x0:x1].copy()
+            if np.sum(subbg==subbg[0,0])==subbg.size:
+                subbg = np.atleast_1d(subbg[0,0])
             hdu2 = fits.PrimaryHDU(subbg,newhead.copy())
             tbghdu.append(hdu2)                
             # Weight
             subwt = wt[y0:y1,x0:x1].copy()
+            if np.sum(subwt==subwt[0,0])==subwt.size:
+                subwt = np.atleast_1d(subwt[0,0])
             hdu3 = fits.PrimaryHDU(subwt,newhead.copy())
             twthdu.append(hdu3)
 

@@ -12,6 +12,6 @@ setup(name='coadd',
       packages=['coadd'],
       package_dir={'':'python'},
       scripts=['bin/coadd'],
-      install_requires=['numpy','astropy(>=4.0)','scipy','dlnpyutils(>=1.0.3)','healpy','sep'],
+      install_requires=['numpy','astropy(>=4.0)','scipy','dlnpyutils(>=1.0.3)','healpy','sep','lanczos'],
       include_package_data=True
 )
